@@ -185,6 +185,15 @@ dump/
 *.out
 .vscode
 
+# AI agent configuration (track only skills for distribution)
+.claude/**
+!.claude/skills/
+!.claude/skills/**
+.codex/
+.agents/**
+!.agents/skills/
+!.agents/skills/**
+
 # AMQ co-op mode
 .agent-mail/
 

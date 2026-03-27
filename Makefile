@@ -1,15 +1,11 @@
-.PHONY: sync-skills check-skills
+.PHONY: check-skills
 
-# Skill sync: .claude/skills/ is source of truth
-sync-skills:
-	@echo "Syncing skills from .claude/skills/ to .codex/skills/ and skills/..."
-	@mkdir -p .codex/skills/langfuse skills/langfuse
-	@cp -R .claude/skills/langfuse/* .codex/skills/langfuse/
-	@cp -R .claude/skills/langfuse/* skills/langfuse/
-	@echo "✓ Skills synced"
-
+# Skill integrity: skills/ is canonical, .claude/skills/ and .agents/skills/ are symlinks
 check-skills:
-	@echo "Checking skill sync..."
-	@diff -rq .claude/skills/langfuse .codex/skills/langfuse || (echo "❌ .codex/skills/langfuse out of sync" && exit 1)
-	@diff -rq .claude/skills/langfuse skills/langfuse || (echo "❌ skills/langfuse out of sync" && exit 1)
-	@echo "✓ Skills in sync"
+	@echo "Checking skill symlinks..."
+	@test -L .claude/skills/langfuse || (echo "❌ .claude/skills/langfuse is not a symlink" && exit 1)
+	@test -L .agents/skills/langfuse || (echo "❌ .agents/skills/langfuse is not a symlink" && exit 1)
+	@test "$$(readlink .claude/skills/langfuse)" = "../../skills/langfuse" || (echo "❌ .claude/skills/langfuse target is not ../../skills/langfuse" && exit 1)
+	@test "$$(readlink .agents/skills/langfuse)" = "../../skills/langfuse" || (echo "❌ .agents/skills/langfuse target is not ../../skills/langfuse" && exit 1)
+	@diff -rq skills/langfuse .claude/skills/langfuse || (echo "❌ .claude/skills/langfuse content mismatch" && exit 1)
+	@echo "✓ Skill symlinks valid"
