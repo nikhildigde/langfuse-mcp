@@ -10,5 +10,10 @@
   "homepage": "https://github.com/avivsinai/langfuse-mcp#skills",
   "license": "MIT",
   "skills": "./skills/",
-  "keywords": ["langfuse", "observability", "traces", "llm", "prompts", "debugging", "mcp", "telemetry"]
+  "keywords": ["langfuse", "observability", "traces", "llm", "prompts", "debugging", "mcp", "telemetry"],
+  "interface": {
+    "displayName": "Langfuse Observability",
+    "shortDescription": "Query traces, debug exceptions, analyze sessions, and manage prompts via MCP",
+    "category": "Observability"
+  }
 }
