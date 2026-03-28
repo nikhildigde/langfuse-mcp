@@ -14,6 +14,15 @@
   "interface": {
     "displayName": "Langfuse Observability",
     "shortDescription": "Query traces, debug exceptions, analyze sessions, and manage prompts via MCP",
-    "category": "Observability"
+    "longDescription": "Inspect Langfuse traces, observations, sessions, exceptions, prompts, and datasets from Codex via bundled skills and MCP workflows.",
+    "developerName": "Aviv Sinai",
+    "category": "Observability",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://github.com/avivsinai/langfuse-mcp",
+    "defaultPrompt": [
+      "Investigate the latest Langfuse exceptions and tell me which service is failing first.",
+      "Summarize the slowest traces from the last 24 hours and suggest where to look next.",
+      "Create a dataset item from this failing trace and label the related prompt for follow-up."
+    ]
   }
 }
