@@ -1,6 +1,6 @@
 {
   "name": "langfuse",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "Langfuse observability - query traces, debug exceptions, analyze sessions, manage prompts via MCP tools",
   "author": {
     "name": "Aviv Sinai",
@@ -10,5 +10,14 @@
   "homepage": "https://github.com/avivsinai/langfuse-mcp#skills",
   "license": "MIT",
   "skills": "./skills/",
-  "keywords": ["langfuse", "observability", "traces", "llm", "prompts", "debugging", "mcp", "telemetry"]
+  "keywords": [
+    "langfuse",
+    "observability",
+    "traces",
+    "llm",
+    "prompts",
+    "debugging",
+    "mcp",
+    "telemetry"
+  ]
 }
