@@ -110,6 +110,19 @@ TOOL_GROUPS = {
         "create_dataset_item",
         "delete_dataset_item",
     ],
+    "annotation_queues": [
+        "list_annotation_queues",
+        "create_annotation_queue",
+        "get_annotation_queue",
+        "list_annotation_queue_items",
+        "get_annotation_queue_item",
+        "create_annotation_queue_item",
+        "update_annotation_queue_item",
+        "delete_annotation_queue_item",
+        "create_annotation_queue_assignment",
+        "delete_annotation_queue_assignment",
+    ],
+    "scores": ["list_scores_v2", "get_score_v2"],
 }
 ALL_TOOL_GROUPS = set(TOOL_GROUPS.keys())
 
@@ -121,6 +134,12 @@ WRITE_TOOLS = {
     "create_dataset",
     "create_dataset_item",
     "delete_dataset_item",
+    "create_annotation_queue",
+    "create_annotation_queue_item",
+    "update_annotation_queue_item",
+    "delete_annotation_queue_item",
+    "create_annotation_queue_assignment",
+    "delete_annotation_queue_assignment",
 }
 
 # Common field names that often contain large values
@@ -312,7 +331,7 @@ def _build_arg_parser(env_defaults: dict[str, Any]) -> argparse.ArgumentParser:
         type=str,
         default=os.getenv("LANGFUSE_MCP_TOOLS", "all"),
         help=(
-            "Comma-separated tool groups to enable: traces,observations,sessions,exceptions,prompts,datasets,schema "
+            "Comma-separated tool groups to enable: traces,observations,sessions,exceptions,prompts,datasets,annotation_queues,scores,schema "
             "or 'all' (default). Reduces token overhead when only specific capabilities needed."
         ),
     )
@@ -398,6 +417,24 @@ def _normalize_field_default(value: Any) -> Any:
     if FieldInfo is not None and isinstance(value, FieldInfo):
         return None
     return value
+
+
+def _coerce_optional_datetime(value: Any, field_name: str) -> datetime | None:
+    """Convert optional datetime input into an aware datetime instance.
+
+    Accepts datetime objects and ISO8601 strings. Raises ValueError for invalid strings.
+    """
+    value = _normalize_field_default(value)
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str):
+        parsed = _parse_datetime_for_sort(value)
+        if parsed is None:
+            raise ValueError(f"Invalid ISO8601 datetime for '{field_name}': {value}")
+        return parsed
+    raise TypeError(f"Invalid type for '{field_name}': expected datetime or ISO8601 string")
 
 
 def _prompts_get(prompts_client: Any, *, name: str, **kwargs: Any) -> Any:
@@ -3296,6 +3333,360 @@ async def delete_dataset_item(
         raise
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Annotation Queue Tools
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def list_annotation_queues(
+    ctx: Context,
+    page: int = Field(1, ge=1, description="Page number for pagination (starts at 1)"),
+    limit: int = Field(50, ge=1, le=100, description="Items per page (max 100)"),
+) -> ResponseDict:
+    """List annotation queues with pagination."""
+    state = cast(MCPState, ctx.request_context.lifespan_context)
+    try:
+        page = _normalize_field_default(page) or 1
+        limit = _normalize_field_default(limit) or 50
+
+        response = state.langfuse_client.api.annotation_queues.list_queues(page=page, limit=limit)
+        items, pagination = _extract_items_from_response(response)
+        queues = [_sdk_object_to_python(item) for item in items]
+        logger.info(f"Listed {len(queues)} annotation queues (page={page}, limit={limit})")
+        return {
+            "data": queues,
+            "metadata": {"page": page, "limit": limit, "item_count": len(queues), "total": pagination.get("total")},
+        }
+    except Exception as e:
+        logger.error(f"Error listing annotation queues: {e}")
+        raise
+
+
+async def create_annotation_queue(
+    ctx: Context,
+    name: str = Field(..., description="Unique queue name"),
+    description: str | None = Field(None, description="Optional queue description"),
+    score_config_ids: list[str] | None = Field(None, description="Optional score config IDs attached to this queue"),
+) -> ResponseDict:
+    """Create an annotation queue."""
+    state = cast(MCPState, ctx.request_context.lifespan_context)
+    try:
+        description = _normalize_field_default(description)
+        score_config_ids = _normalize_field_default(score_config_ids)
+
+        try:
+            from langfuse.api.resources.annotation_queues.types.create_annotation_queue_request import CreateAnnotationQueueRequest
+
+            request: Any = CreateAnnotationQueueRequest(name=name, description=description, score_config_ids=score_config_ids)
+        except (ImportError, ModuleNotFoundError):
+            request = {"name": name, "description": description, "score_config_ids": score_config_ids}
+
+        queue = state.langfuse_client.api.annotation_queues.create_queue(request=request)
+        result = _sdk_object_to_python(queue)
+        logger.info(f"Created annotation queue '{name}' (id={result.get('id')})")
+        return {"data": result, "metadata": {"created": True, "queue_id": result.get("id"), "name": name}}
+    except Exception as e:
+        logger.error(f"Error creating annotation queue '{name}': {e}")
+        raise
+
+
+async def get_annotation_queue(
+    ctx: Context,
+    queue_id: str = Field(..., description="Annotation queue ID"),
+) -> ResponseDict:
+    """Get a single annotation queue by ID."""
+    state = cast(MCPState, ctx.request_context.lifespan_context)
+    try:
+        queue = state.langfuse_client.api.annotation_queues.get_queue(queue_id=queue_id)
+        result = _sdk_object_to_python(queue)
+        if not result:
+            raise LookupError(f"Annotation queue '{queue_id}' not found")
+        logger.info(f"Fetched annotation queue '{queue_id}'")
+        return {"data": result, "metadata": {"queue_id": queue_id}}
+    except Exception as e:
+        logger.error(f"Error fetching annotation queue '{queue_id}': {e}")
+        raise
+
+
+async def list_annotation_queue_items(
+    ctx: Context,
+    queue_id: str = Field(..., description="Annotation queue ID"),
+    page: int = Field(1, ge=1, description="Page number for pagination (starts at 1)"),
+    limit: int = Field(50, ge=1, le=100, description="Items per page (max 100)"),
+) -> ResponseDict:
+    """List items in an annotation queue."""
+    state = cast(MCPState, ctx.request_context.lifespan_context)
+    try:
+        page = _normalize_field_default(page) or 1
+        limit = _normalize_field_default(limit) or 50
+
+        response = state.langfuse_client.api.annotation_queues.list_queue_items(queue_id=queue_id, page=page, limit=limit)
+        items, pagination = _extract_items_from_response(response)
+        queue_items = [_sdk_object_to_python(item) for item in items]
+        logger.info(f"Listed {len(queue_items)} items from annotation queue '{queue_id}'")
+        return {
+            "data": queue_items,
+            "metadata": {
+                "queue_id": queue_id,
+                "page": page,
+                "limit": limit,
+                "item_count": len(queue_items),
+                "total": pagination.get("total"),
+            },
+        }
+    except Exception as e:
+        logger.error(f"Error listing items for annotation queue '{queue_id}': {e}")
+        raise
+
+
+async def get_annotation_queue_item(
+    ctx: Context,
+    queue_id: str = Field(..., description="Annotation queue ID"),
+    item_id: str = Field(..., description="Annotation queue item ID"),
+) -> ResponseDict:
+    """Get a specific annotation queue item by queue and item ID."""
+    state = cast(MCPState, ctx.request_context.lifespan_context)
+    try:
+        item = state.langfuse_client.api.annotation_queues.get_queue_item(queue_id=queue_id, item_id=item_id)
+        result = _sdk_object_to_python(item)
+        if not result:
+            raise LookupError(f"Annotation queue item '{item_id}' not found in queue '{queue_id}'")
+        logger.info(f"Fetched annotation queue item '{item_id}' from queue '{queue_id}'")
+        return {"data": result, "metadata": {"queue_id": queue_id, "item_id": item_id}}
+    except Exception as e:
+        logger.error(f"Error fetching annotation queue item '{item_id}' from queue '{queue_id}': {e}")
+        raise
+
+
+async def create_annotation_queue_item(
+    ctx: Context,
+    queue_id: str = Field(..., description="Annotation queue ID"),
+    object_id: str = Field(..., description="Object ID to enqueue"),
+    object_type: str = Field(..., description="Object type, for example TRACE or OBSERVATION"),
+    status: str | None = Field(None, description="Optional status"),
+) -> ResponseDict:
+    """Create an annotation queue item."""
+    state = cast(MCPState, ctx.request_context.lifespan_context)
+    try:
+        status = _normalize_field_default(status)
+        request_kwargs: dict[str, Any] = {"object_id": object_id, "object_type": object_type}
+        if status is not None:
+            request_kwargs["status"] = status
+
+        try:
+            from langfuse.api.resources.annotation_queues.types.create_annotation_queue_item_request import (
+                CreateAnnotationQueueItemRequest,
+            )
+
+            request: Any = CreateAnnotationQueueItemRequest(**request_kwargs)
+        except (ImportError, ModuleNotFoundError):
+            request = request_kwargs
+
+        item = state.langfuse_client.api.annotation_queues.create_queue_item(queue_id=queue_id, request=request)
+        result = _sdk_object_to_python(item)
+        logger.info(f"Created annotation queue item '{result.get('id')}' in queue '{queue_id}'")
+        return {"data": result, "metadata": {"created": True, "queue_id": queue_id, "item_id": result.get("id")}}
+    except Exception as e:
+        logger.error(f"Error creating annotation queue item in queue '{queue_id}': {e}")
+        raise
+
+
+async def update_annotation_queue_item(
+    ctx: Context,
+    queue_id: str = Field(..., description="Annotation queue ID"),
+    item_id: str = Field(..., description="Annotation queue item ID"),
+    status: str = Field(..., description="New status value"),
+) -> ResponseDict:
+    """Update the status of an annotation queue item."""
+    state = cast(MCPState, ctx.request_context.lifespan_context)
+    try:
+        try:
+            from langfuse.api.resources.annotation_queues.types.update_annotation_queue_item_request import (
+                UpdateAnnotationQueueItemRequest,
+            )
+
+            request: Any = UpdateAnnotationQueueItemRequest(status=status)
+        except (ImportError, ModuleNotFoundError):
+            request = {"status": status}
+
+        item = state.langfuse_client.api.annotation_queues.update_queue_item(queue_id=queue_id, item_id=item_id, request=request)
+        result = _sdk_object_to_python(item)
+        logger.info(f"Updated annotation queue item '{item_id}' in queue '{queue_id}'")
+        return {"data": result, "metadata": {"updated": True, "queue_id": queue_id, "item_id": item_id}}
+    except Exception as e:
+        logger.error(f"Error updating annotation queue item '{item_id}' in queue '{queue_id}': {e}")
+        raise
+
+
+async def delete_annotation_queue_item(
+    ctx: Context,
+    queue_id: str = Field(..., description="Annotation queue ID"),
+    item_id: str = Field(..., description="Annotation queue item ID"),
+) -> ResponseDict:
+    """Delete an annotation queue item."""
+    state = cast(MCPState, ctx.request_context.lifespan_context)
+    try:
+        response = state.langfuse_client.api.annotation_queues.delete_queue_item(queue_id=queue_id, item_id=item_id)
+        result = _sdk_object_to_python(response) if response else {}
+        logger.info(f"Deleted annotation queue item '{item_id}' in queue '{queue_id}'")
+        return {"data": result, "metadata": {"deleted": True, "queue_id": queue_id, "item_id": item_id}}
+    except Exception as e:
+        logger.error(f"Error deleting annotation queue item '{item_id}' in queue '{queue_id}': {e}")
+        raise
+
+
+async def create_annotation_queue_assignment(
+    ctx: Context,
+    queue_id: str = Field(..., description="Annotation queue ID"),
+    user_id: str = Field(..., description="User ID to assign"),
+) -> ResponseDict:
+    """Assign a user to an annotation queue."""
+    state = cast(MCPState, ctx.request_context.lifespan_context)
+    try:
+        try:
+            from langfuse.api.resources.annotation_queues.types.annotation_queue_assignment_request import (
+                AnnotationQueueAssignmentRequest,
+            )
+
+            request: Any = AnnotationQueueAssignmentRequest(user_id=user_id)
+        except (ImportError, ModuleNotFoundError):
+            request = {"user_id": user_id}
+
+        response = state.langfuse_client.api.annotation_queues.create_queue_assignment(queue_id=queue_id, request=request)
+        result = _sdk_object_to_python(response) if response else {}
+        logger.info(f"Assigned user '{user_id}' to annotation queue '{queue_id}'")
+        return {"data": result, "metadata": {"created": True, "queue_id": queue_id, "user_id": user_id}}
+    except Exception as e:
+        logger.error(f"Error creating assignment for user '{user_id}' in queue '{queue_id}': {e}")
+        raise
+
+
+async def delete_annotation_queue_assignment(
+    ctx: Context,
+    queue_id: str = Field(..., description="Annotation queue ID"),
+    user_id: str = Field(..., description="User ID to unassign"),
+) -> ResponseDict:
+    """Unassign a user from an annotation queue."""
+    state = cast(MCPState, ctx.request_context.lifespan_context)
+    try:
+        try:
+            from langfuse.api.resources.annotation_queues.types.annotation_queue_assignment_request import (
+                AnnotationQueueAssignmentRequest,
+            )
+
+            request: Any = AnnotationQueueAssignmentRequest(user_id=user_id)
+        except (ImportError, ModuleNotFoundError):
+            request = {"user_id": user_id}
+
+        response = state.langfuse_client.api.annotation_queues.delete_queue_assignment(queue_id=queue_id, request=request)
+        result = _sdk_object_to_python(response) if response else {}
+        logger.info(f"Removed user '{user_id}' assignment from annotation queue '{queue_id}'")
+        return {"data": result, "metadata": {"deleted": True, "queue_id": queue_id, "user_id": user_id}}
+    except Exception as e:
+        logger.error(f"Error deleting assignment for user '{user_id}' in queue '{queue_id}': {e}")
+        raise
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Score V2 Tools
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def list_scores_v2(
+    ctx: Context,
+    page: int = Field(1, ge=1, description="Page number for pagination (starts at 1)"),
+    limit: int = Field(50, ge=1, le=100, description="Items per page (max 100)"),
+    user_id: str | None = Field(None, description="Optional user ID filter"),
+    name: str | None = Field(None, description="Optional score name filter"),
+    from_timestamp: str | None = Field(None, description="Optional ISO8601 timestamp lower bound"),
+    to_timestamp: str | None = Field(None, description="Optional ISO8601 timestamp upper bound"),
+    environment: str | None = Field(None, description="Optional environment filter"),
+    source: str | None = Field(None, description="Optional score source filter"),
+    operator: str | None = Field(None, description="Optional operator filter"),
+    value: float | None = Field(None, description="Optional numeric score value filter"),
+    score_ids: str | None = Field(None, description="Optional comma-separated score IDs"),
+    config_id: str | None = Field(None, description="Optional score config ID"),
+    session_id: str | None = Field(None, description="Optional session ID"),
+    trace_id: str | None = Field(None, description="Optional trace ID"),
+    queue_id: str | None = Field(None, description="Optional annotation queue ID"),
+    data_type: str | None = Field(None, description="Optional score data type"),
+    trace_tags: str | None = Field(None, description="Optional comma-separated trace tags"),
+) -> ResponseDict:
+    """List scores from the score v2 API with optional filters."""
+    state = cast(MCPState, ctx.request_context.lifespan_context)
+    try:
+        page = _normalize_field_default(page) or 1
+        limit = _normalize_field_default(limit) or 50
+        user_id = _normalize_field_default(user_id)
+        name = _normalize_field_default(name)
+        from_timestamp = _coerce_optional_datetime(from_timestamp, "from_timestamp")
+        to_timestamp = _coerce_optional_datetime(to_timestamp, "to_timestamp")
+        environment = _normalize_field_default(environment)
+        source = _normalize_field_default(source)
+        operator = _normalize_field_default(operator)
+        value = _normalize_field_default(value)
+        if value is not None:
+            value = float(value)
+        score_ids = _normalize_field_default(score_ids)
+        config_id = _normalize_field_default(config_id)
+        session_id = _normalize_field_default(session_id)
+        trace_id = _normalize_field_default(trace_id)
+        queue_id = _normalize_field_default(queue_id)
+        data_type = _normalize_field_default(data_type)
+        trace_tags = _normalize_field_default(trace_tags)
+
+        api_kwargs: dict[str, Any] = {
+            "page": page,
+            "limit": limit,
+            "user_id": user_id,
+            "name": name,
+            "from_timestamp": from_timestamp,
+            "to_timestamp": to_timestamp,
+            "environment": environment,
+            "source": source,
+            "operator": operator,
+            "value": value,
+            "score_ids": score_ids,
+            "config_id": config_id,
+            "session_id": session_id,
+            "trace_id": trace_id,
+            "queue_id": queue_id,
+            "data_type": data_type,
+            "trace_tags": trace_tags,
+        }
+        api_kwargs = {k: v for k, v in api_kwargs.items() if v is not None}
+
+        response = state.langfuse_client.api.score_v_2.get(**api_kwargs)
+        items, pagination = _extract_items_from_response(response)
+        scores = [_sdk_object_to_python(item) for item in items]
+        logger.info(f"Listed {len(scores)} scores (page={page}, limit={limit})")
+        return {
+            "data": scores,
+            "metadata": {"page": page, "limit": limit, "item_count": len(scores), "total": pagination.get("total")},
+        }
+    except Exception as e:
+        logger.error(f"Error listing scores v2: {e}")
+        raise
+
+
+async def get_score_v2(
+    ctx: Context,
+    score_id: str = Field(..., description="Score ID"),
+) -> ResponseDict:
+    """Get a score by ID from the score v2 API."""
+    state = cast(MCPState, ctx.request_context.lifespan_context)
+    try:
+        score = state.langfuse_client.api.score_v_2.get_by_id(score_id=score_id)
+        result = _sdk_object_to_python(score)
+        if not result:
+            raise LookupError(f"Score '{score_id}' not found")
+        logger.info(f"Fetched score '{score_id}'")
+        return {"data": result, "metadata": {"score_id": score_id}}
+    except Exception as e:
+        logger.error(f"Error fetching score '{score_id}': {e}")
+        raise
+
+
 def app_factory(
     public_key: str,
     secret_key: str,
@@ -3314,7 +3705,7 @@ def app_factory(
         host: Langfuse API host URL
         cache_size: Size of LRU caches
         dump_dir: Directory for full_json_file output mode
-        enabled_tools: Tool groups to enable (default: all). Options: traces, observations, sessions, exceptions, prompts, datasets, schema
+        enabled_tools: Tool groups to enable (default: all). Options: traces, observations, sessions, exceptions, prompts, datasets, annotation_queues, scores, schema
         timeout: API request timeout in seconds (default: 30). The Langfuse SDK defaults to 5s which is too aggressive.
         read_only: If True, disable all write operations (create/update/delete tools).
     """
@@ -3386,6 +3777,20 @@ def app_factory(
         "create_dataset": create_dataset,
         "create_dataset_item": create_dataset_item,
         "delete_dataset_item": delete_dataset_item,
+        # Annotation queue tools
+        "list_annotation_queues": list_annotation_queues,
+        "create_annotation_queue": create_annotation_queue,
+        "get_annotation_queue": get_annotation_queue,
+        "list_annotation_queue_items": list_annotation_queue_items,
+        "get_annotation_queue_item": get_annotation_queue_item,
+        "create_annotation_queue_item": create_annotation_queue_item,
+        "update_annotation_queue_item": update_annotation_queue_item,
+        "delete_annotation_queue_item": delete_annotation_queue_item,
+        "create_annotation_queue_assignment": create_annotation_queue_assignment,
+        "delete_annotation_queue_assignment": delete_annotation_queue_assignment,
+        # Score v2 tools
+        "list_scores_v2": list_scores_v2,
+        "get_score_v2": get_score_v2,
     }
 
     # Register only enabled tool groups (skip write tools in read-only mode)
