@@ -331,7 +331,8 @@ def _build_arg_parser(env_defaults: dict[str, Any]) -> argparse.ArgumentParser:
         type=str,
         default=os.getenv("LANGFUSE_MCP_TOOLS", "all"),
         help=(
-            "Comma-separated tool groups to enable: traces,observations,sessions,exceptions,prompts,datasets,annotation_queues,scores,schema "
+            "Comma-separated tool groups to enable: "
+            "traces,observations,sessions,exceptions,prompts,datasets,annotation_queues,scores,schema "
             "or 'all' (default). Reduces token overhead when only specific capabilities needed."
         ),
     )
@@ -3377,7 +3378,7 @@ async def create_annotation_queue(
         try:
             from langfuse.api.resources.annotation_queues.types.create_annotation_queue_request import CreateAnnotationQueueRequest
 
-            request: Any = CreateAnnotationQueueRequest(name=name, description=description, score_config_ids=score_config_ids)
+            request: Any = CreateAnnotationQueueRequest(name=name, description=description, score_config_ids=score_config_ids)  # type: ignore[call-arg]  # SDK uses camelCase aliases
         except (ImportError, ModuleNotFoundError):
             request = {"name": name, "description": description, "score_config_ids": score_config_ids}
 
@@ -3505,7 +3506,7 @@ async def update_annotation_queue_item(
                 UpdateAnnotationQueueItemRequest,
             )
 
-            request: Any = UpdateAnnotationQueueItemRequest(status=status)
+            request: Any = UpdateAnnotationQueueItemRequest(status=status)  # type: ignore[arg-type]  # SDK accepts str via validator
         except (ImportError, ModuleNotFoundError):
             request = {"status": status}
 
@@ -3548,7 +3549,7 @@ async def create_annotation_queue_assignment(
                 AnnotationQueueAssignmentRequest,
             )
 
-            request: Any = AnnotationQueueAssignmentRequest(user_id=user_id)
+            request: Any = AnnotationQueueAssignmentRequest(user_id=user_id)  # type: ignore[call-arg]  # SDK uses camelCase aliases
         except (ImportError, ModuleNotFoundError):
             request = {"user_id": user_id}
 
@@ -3574,7 +3575,7 @@ async def delete_annotation_queue_assignment(
                 AnnotationQueueAssignmentRequest,
             )
 
-            request: Any = AnnotationQueueAssignmentRequest(user_id=user_id)
+            request: Any = AnnotationQueueAssignmentRequest(user_id=user_id)  # type: ignore[call-arg]  # SDK uses camelCase aliases
         except (ImportError, ModuleNotFoundError):
             request = {"user_id": user_id}
 
@@ -3619,8 +3620,8 @@ async def list_scores_v2(
         limit = _normalize_field_default(limit) or 50
         user_id = _normalize_field_default(user_id)
         name = _normalize_field_default(name)
-        from_timestamp = _coerce_optional_datetime(from_timestamp, "from_timestamp")
-        to_timestamp = _coerce_optional_datetime(to_timestamp, "to_timestamp")
+        from_dt = _coerce_optional_datetime(from_timestamp, "from_timestamp")
+        to_dt = _coerce_optional_datetime(to_timestamp, "to_timestamp")
         environment = _normalize_field_default(environment)
         source = _normalize_field_default(source)
         operator = _normalize_field_default(operator)
@@ -3640,8 +3641,8 @@ async def list_scores_v2(
             "limit": limit,
             "user_id": user_id,
             "name": name,
-            "from_timestamp": from_timestamp,
-            "to_timestamp": to_timestamp,
+            "from_timestamp": from_dt,
+            "to_timestamp": to_dt,
             "environment": environment,
             "source": source,
             "operator": operator,
@@ -3705,7 +3706,8 @@ def app_factory(
         host: Langfuse API host URL
         cache_size: Size of LRU caches
         dump_dir: Directory for full_json_file output mode
-        enabled_tools: Tool groups to enable (default: all). Options: traces, observations, sessions, exceptions, prompts, datasets, annotation_queues, scores, schema
+        enabled_tools: Tool groups to enable (default: all). Options: traces, observations,
+            sessions, exceptions, prompts, datasets, annotation_queues, scores, schema
         timeout: API request timeout in seconds (default: 30). The Langfuse SDK defaults to 5s which is too aggressive.
         read_only: If True, disable all write operations (create/update/delete tools).
     """
